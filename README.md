@@ -5,6 +5,7 @@ Audio-reactive text visualizer for Waybar, focused on Omarchy/Arch Linux workflo
 ## Features
 
 - Streams JSON output continuously for Waybar custom modules
+- Real spectrum-like bars via `cava` when available
 - Works with PipeWire via `wpctl`, with fallback to PulseAudio via `pactl`
 - Click actions:
   - Left click: toggle mute
@@ -13,15 +14,17 @@ Audio-reactive text visualizer for Waybar, focused on Omarchy/Arch Linux workflo
 
 ## Current MVP status
 
-This initial MVP is **audio-level reactive** (volume + playback-state driven), not a full FFT spectrum yet.
+Current behavior by backend:
 
-Roadmap includes real audio spectrum bands from live PCM input.
+- `cava` (preferred): uses real-time audio bars
+- `wpctl` / `pactl`: uses audio-level reactive bars (fallback)
 
 ## Requirements
 
 - Rust toolchain (`cargo`, `rustc`)
 - Waybar
 - One of:
+  - `cava` (recommended for best visualizer quality)
   - PipeWire tools: `wpctl` (recommended)
   - PulseAudio tools: `pactl` (fallback)
 - Optional for media controls: `playerctl`
@@ -65,11 +68,12 @@ omarchy-restart-waybar
 ## Runtime flags
 
 ```bash
-waybar-audio-visualizer --interval-ms 90 --bands 18
+waybar-audio-visualizer --interval-ms 90 --bands 18 --backend auto
 ```
 
 - `--interval-ms`: refresh interval in ms (default: 100)
 - `--bands`: number of text bands (default: 16)
+- `--backend`: `auto|cava|wpctl|pactl|mock` (default: `auto`)
 - `--toggle-mute`: toggles default sink mute
 - `--toggle-playback`: toggles player playback state
 
