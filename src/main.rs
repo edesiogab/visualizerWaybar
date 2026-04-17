@@ -55,6 +55,7 @@ struct MediaInfo {
 struct DisplayOptions {
     show_title: bool,
     title_max_len: usize,
+    title_scroll_every: usize,
 }
 
 fn main() {
@@ -81,6 +82,7 @@ fn main() {
     let display_options = DisplayOptions {
         show_title: args.iter().any(|a| a == "--show-title"),
         title_max_len: parse_flag_usize(&args, "--title-max-len", 24),
+        title_scroll_every: parse_flag_usize(&args, "--title-scroll-every", 4),
     };
     // Backend resolution is runtime-based so the same binary works across systems.
     let backend_preference = parse_backend_flag(&args);
@@ -103,6 +105,7 @@ fn print_help() {
     println!("  --cava-source <src>  auto|default-monitor|<pulse-source>");
     println!("  --show-title         Show short media title next to bars");
     println!("  --title-max-len <n>  Max title chars when --show-title is enabled");
+    println!("  --title-scroll-every <n>  Frames per title shift (higher = slower)");
     println!("  --toggle-mute        Toggle default sink mute");
     println!("  --toggle-playback    Toggle media playback");
 }
@@ -135,7 +138,7 @@ fn stream_waybar(
         }
 
         let bars = render_bars(snapshot.level, bands, tick);
-        let text = compose_module_text(&bars, media_cache.as_ref(), display);
+        let text = compose_module_text(&bars, media_cache.as_ref(), display, tick);
         let class = if snapshot.muted {
             "muted"
         } else if snapshot.playing {
@@ -225,7 +228,7 @@ fn stream_cava_waybar(bands: usize, source_mode: &CavaSourceMode, display: &Disp
 
             // Convert CAVA ascii digits (0-7) into a compact text bar line.
             let bars = render_cava_ascii_bars(&line);
-            let text = compose_module_text(&bars, media_cache.as_ref(), display);
+            let text = compose_module_text(&bars, media_cache.as_ref(), display, frame_count as u64);
             let control = read_control_snapshot().unwrap_or(AudioSnapshot {
                 level: 0.0,
                 muted: false,
@@ -407,7 +410,12 @@ fn build_tooltip(
     lines.join("\n")
 }
 
-fn compose_module_text(bars: &str, media: Option<&MediaInfo>, display: &DisplayOptions) -> String {
+fn compose_module_text(
+    bars: &str,
+    media: Option<&MediaInfo>,
+    display: &DisplayOptions,
+    frame: u64,
+) -> String {
     if !display.show_title {
         return bars.to_string();
     }
@@ -428,11 +436,16 @@ fn compose_module_text(bars: &str, media: Option<&MediaInfo>, display: &DisplayO
         return bars.to_string();
     }
 
-    let short_title = truncate_label(raw_title, display.title_max_len);
-    format!("{} {}", bars, short_title)
+    let title = marquee_label(
+        raw_title,
+        display.title_max_len,
+        frame,
+        display.title_scroll_every,
+    );
+    format!("{} {}", bars, title)
 }
 
-fn truncate_label(input: &str, max_len: usize) -> String {
+fn marquee_label(input: &str, max_len: usize, frame: u64, scroll_every: usize) -> String {
     if max_len == 0 {
         return String::new();
     }
@@ -442,13 +455,18 @@ fn truncate_label(input: &str, max_len: usize) -> String {
         return input.to_string();
     }
 
-    let keep = max_len.saturating_sub(3);
-    if keep == 0 {
-        return "...".to_string();
+    let spacer: Vec<char> = "   •   ".chars().collect();
+    let mut source = chars;
+    source.extend(spacer);
+
+    let step = scroll_every.max(1);
+    let offset = ((frame as usize) / step) % source.len();
+    let mut out = String::with_capacity(max_len);
+    for idx in 0..max_len {
+        let ch = source[(offset + idx) % source.len()];
+        out.push(ch);
     }
 
-    let mut out: String = chars.into_iter().take(keep).collect();
-    out.push_str("...");
     out
 }
 fn render_bars(level: f32, bands: usize, tick: u64) -> String {

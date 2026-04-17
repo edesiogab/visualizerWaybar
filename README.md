@@ -69,7 +69,7 @@ omarchy-restart-waybar
 ## Runtime flags
 
 ```bash
-waybar-audio-visualizer --interval-ms 90 --bands 18 --backend auto --cava-source auto --show-title --title-max-len 22
+waybar-audio-visualizer --interval-ms 90 --bands 18 --backend auto --cava-source auto --show-title --title-max-len 22 --title-scroll-every 6
 ```
 
 - `--interval-ms`: refresh interval in ms (default: 100)
@@ -77,7 +77,8 @@ waybar-audio-visualizer --interval-ms 90 --bands 18 --backend auto --cava-source
 - `--backend`: `auto|cava|wpctl|pactl|mock` (default: `auto`)
 - `--cava-source`: `auto|default-monitor|<pulse-source>` (default: `auto`)
 - `--show-title`: shows a short media title beside bars
-- `--title-max-len`: max title length when `--show-title` is enabled (default: `24`)
+- `--title-max-len`: title window width when `--show-title` is enabled; long titles scroll horizontally (default: `24`)
+- `--title-scroll-every`: frames per title shift for marquee speed; higher values are slower (default: `4`)
 - `--toggle-mute`: toggles default sink mute
 - `--toggle-playback`: toggles player playback state
 
