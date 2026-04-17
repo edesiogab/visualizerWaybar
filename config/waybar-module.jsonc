@@ -1,8 +1,8 @@
 "custom/audio_visualizer": {
-  "exec": "~/.local/bin/waybar-audio-visualizer --interval-ms 90 --bands 18 --backend auto --cava-source auto",
+  "exec": "~/.local/bin/waybar-audio-visualizer --interval-ms 90 --bands 18 --backend auto --cava-source auto --show-title --title-max-len 22",
   "return-type": "json",
   "format": "{text}",
   "on-click": "~/.local/bin/waybar-audio-visualizer --toggle-playback",
-  "on-click-right": "~/.local/bin/waybar-audio-visualizer --toggle-mute",
+  "on-click-right": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
   "tooltip": true
 }

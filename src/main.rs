@@ -44,6 +44,19 @@ struct AudioSnapshot {
     playing: bool,
 }
 
+#[derive(Clone, Debug)]
+struct MediaInfo {
+    title: String,
+    artist: String,
+    player: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DisplayOptions {
+    show_title: bool,
+    title_max_len: usize,
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -65,11 +78,21 @@ fn main() {
     let interval_ms = parse_flag_u64(&args, "--interval-ms", 100);
     let bands = parse_flag_usize(&args, "--bands", 16);
     let cava_source_mode = parse_cava_source_flag(&args);
+    let display_options = DisplayOptions {
+        show_title: args.iter().any(|a| a == "--show-title"),
+        title_max_len: parse_flag_usize(&args, "--title-max-len", 24),
+    };
     // Backend resolution is runtime-based so the same binary works across systems.
     let backend_preference = parse_backend_flag(&args);
     let backend = resolve_backend(backend_preference);
 
-    stream_waybar(backend, interval_ms, bands, &cava_source_mode);
+    stream_waybar(
+        backend,
+        interval_ms,
+        bands,
+        &cava_source_mode,
+        &display_options,
+    );
 }
 
 fn print_help() {
@@ -78,18 +101,27 @@ fn print_help() {
     println!("  --bands <n>          Number of visualizer bands (default 16)");
     println!("  --backend <name>     auto|cava|wpctl|pactl|mock (default auto)");
     println!("  --cava-source <src>  auto|default-monitor|<pulse-source>");
+    println!("  --show-title         Show short media title next to bars");
+    println!("  --title-max-len <n>  Max title chars when --show-title is enabled");
     println!("  --toggle-mute        Toggle default sink mute");
     println!("  --toggle-playback    Toggle media playback");
 }
 
-fn stream_waybar(backend: Backend, interval_ms: u64, bands: usize, cava_source_mode: &CavaSourceMode) {
+fn stream_waybar(
+    backend: Backend,
+    interval_ms: u64,
+    bands: usize,
+    cava_source_mode: &CavaSourceMode,
+    display: &DisplayOptions,
+) {
     if let Backend::Cava = backend {
         // CAVA has its own read loop and pacing based on CAVA output.
-        stream_cava_waybar(bands, cava_source_mode);
+        stream_cava_waybar(bands, cava_source_mode, display);
         return;
     }
 
     let mut tick: u64 = 0;
+    let mut media_cache: Option<MediaInfo> = None;
     loop {
         let start = Instant::now();
         let snapshot = read_snapshot(backend).unwrap_or(AudioSnapshot {
@@ -98,7 +130,12 @@ fn stream_waybar(backend: Backend, interval_ms: u64, bands: usize, cava_source_m
             playing: false,
         });
 
-        let text = render_bars(snapshot.level, bands, tick);
+        if tick % 10 == 0 {
+            media_cache = read_media_info();
+        }
+
+        let bars = render_bars(snapshot.level, bands, tick);
+        let text = compose_module_text(&bars, media_cache.as_ref(), display);
         let class = if snapshot.muted {
             "muted"
         } else if snapshot.playing {
@@ -111,11 +148,12 @@ fn stream_waybar(backend: Backend, interval_ms: u64, bands: usize, cava_source_m
             "text": text,
             "class": class,
             "alt": class,
-            "tooltip": format!(
-                "backend: {}\\nlevel: {}%\\nstate: {}",
+            "tooltip": build_tooltip(
                 backend_name(backend),
-                (snapshot.level * 100.0).round(),
-                class
+                None,
+                snapshot.level,
+                class,
+                media_cache.as_ref()
             )
         });
 
@@ -135,8 +173,9 @@ fn write_payload_line(line: &str) -> io::Result<()> {
     writeln!(stdout, "{}", line)
 }
 
-fn stream_cava_waybar(bands: usize, source_mode: &CavaSourceMode) {
+fn stream_cava_waybar(bands: usize, source_mode: &CavaSourceMode, display: &DisplayOptions) {
     let mut last_default_sink = get_default_sink_name();
+    let mut media_cache: Option<MediaInfo> = None;
 
     loop {
         let source = resolve_cava_source(source_mode, last_default_sink.as_deref());
@@ -153,7 +192,7 @@ fn stream_cava_waybar(bands: usize, source_mode: &CavaSourceMode) {
             Err(_) => {
                 // If CAVA fails to spawn, keep the module alive via control backend fallback.
                 let fallback = detect_control_backend();
-                stream_waybar(fallback, 100, bands, source_mode);
+                stream_waybar(fallback, 100, bands, source_mode, display);
                 return;
             }
         };
@@ -164,7 +203,7 @@ fn stream_cava_waybar(bands: usize, source_mode: &CavaSourceMode) {
                 let _ = child.kill();
                 let _ = fs::remove_file(&config_path);
                 let fallback = detect_control_backend();
-                stream_waybar(fallback, 100, bands, source_mode);
+                stream_waybar(fallback, 100, bands, source_mode, display);
                 return;
             }
         };
@@ -186,11 +225,16 @@ fn stream_cava_waybar(bands: usize, source_mode: &CavaSourceMode) {
 
             // Convert CAVA ascii digits (0-7) into a compact text bar line.
             let bars = render_cava_ascii_bars(&line);
+            let text = compose_module_text(&bars, media_cache.as_ref(), display);
             let control = read_control_snapshot().unwrap_or(AudioSnapshot {
                 level: 0.0,
                 muted: false,
                 playing: false,
             });
+
+            if frame_count % 10 == 0 {
+                media_cache = read_media_info();
+            }
 
             let class = if control.muted {
                 "muted"
@@ -201,15 +245,15 @@ fn stream_cava_waybar(bands: usize, source_mode: &CavaSourceMode) {
             };
 
             let payload = json!({
-                "text": bars,
+                "text": text,
                 "class": class,
                 "alt": class,
-                "tooltip": format!(
-                    "backend: {}\\nsource: {}\\nlevel: {}%\\nstate: {}",
+                "tooltip": build_tooltip(
                     backend_name(Backend::Cava),
-                    source,
-                    (control.level * 100.0).round(),
-                    class
+                    Some(source.as_str()),
+                    control.level,
+                    class,
+                    media_cache.as_ref()
                 )
             });
 
@@ -300,6 +344,113 @@ fn get_default_sink_name() -> Option<String> {
     }
 }
 
+fn read_media_info() -> Option<MediaInfo> {
+    if !command_exists("playerctl") {
+        return None;
+    }
+
+    let raw = run_capture(
+        "playerctl",
+        &["metadata", "--format", "{{title}}|||{{artist}}|||{{playerName}}"],
+    )?;
+
+    let line = raw
+        .lines()
+        .find(|l| !l.trim().is_empty() && !l.contains("No players found"))?
+        .trim();
+
+    let mut parts = line.splitn(3, "|||");
+    let title = parts.next().unwrap_or("").trim().to_string();
+    let artist = parts.next().unwrap_or("").trim().to_string();
+    let player = parts.next().unwrap_or("").trim().to_string();
+
+    if title.is_empty() && artist.is_empty() {
+        return None;
+    }
+
+    Some(MediaInfo {
+        title,
+        artist,
+        player,
+    })
+}
+
+fn build_tooltip(
+    backend_name: &str,
+    source: Option<&str>,
+    level: f32,
+    state: &str,
+    media: Option<&MediaInfo>,
+) -> String {
+    let mut lines = vec![
+        format!("backend: {}", backend_name),
+        format!("level: {}%", (level * 100.0).round()),
+        format!("state: {}", state),
+    ];
+
+    if let Some(src) = source {
+        lines.insert(1, format!("source: {}", src));
+    }
+
+    if let Some(info) = media {
+        if !info.title.is_empty() {
+            lines.push(format!("now: {}", info.title));
+        }
+        if !info.artist.is_empty() {
+            lines.push(format!("artist: {}", info.artist));
+        }
+        if !info.player.is_empty() {
+            lines.push(format!("player: {}", info.player));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn compose_module_text(bars: &str, media: Option<&MediaInfo>, display: &DisplayOptions) -> String {
+    if !display.show_title {
+        return bars.to_string();
+    }
+
+    let Some(info) = media else {
+        return bars.to_string();
+    };
+
+    let raw_title = if !info.title.is_empty() {
+        info.title.as_str()
+    } else if !info.artist.is_empty() {
+        info.artist.as_str()
+    } else {
+        ""
+    };
+
+    if raw_title.is_empty() {
+        return bars.to_string();
+    }
+
+    let short_title = truncate_label(raw_title, display.title_max_len);
+    format!("{} {}", bars, short_title)
+}
+
+fn truncate_label(input: &str, max_len: usize) -> String {
+    if max_len == 0 {
+        return String::new();
+    }
+
+    let chars: Vec<char> = input.chars().collect();
+    if chars.len() <= max_len {
+        return input.to_string();
+    }
+
+    let keep = max_len.saturating_sub(3);
+    if keep == 0 {
+        return "...".to_string();
+    }
+
+    let mut out: String = chars.into_iter().take(keep).collect();
+    out.push_str("...");
+    out
+}
 fn render_bars(level: f32, bands: usize, tick: u64) -> String {
     let charset: Vec<char> = "▁▂▃▄▅▆▇█".chars().collect();
     let mut out = String::with_capacity(bands);
