@@ -1,5 +1,5 @@
 "custom/audio_visualizer": {
-  "exec": "~/.local/bin/waybar-audio-visualizer --interval-ms 90 --bands 18 --backend auto",
+  "exec": "~/.local/bin/waybar-audio-visualizer --interval-ms 90 --bands 18 --backend auto --cava-source auto",
   "return-type": "json",
   "format": "{text}",
   "on-click": "~/.local/bin/waybar-audio-visualizer --toggle-playback",

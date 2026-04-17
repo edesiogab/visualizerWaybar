@@ -30,6 +30,13 @@ enum BackendPreference {
     Mock,
 }
 
+#[derive(Clone, Debug)]
+enum CavaSourceMode {
+    Auto,
+    DefaultMonitor,
+    Explicit(String),
+}
+
 #[derive(Clone, Copy, Debug)]
 struct AudioSnapshot {
     level: f32,
@@ -57,11 +64,12 @@ fn main() {
 
     let interval_ms = parse_flag_u64(&args, "--interval-ms", 100);
     let bands = parse_flag_usize(&args, "--bands", 16);
+    let cava_source_mode = parse_cava_source_flag(&args);
     // Backend resolution is runtime-based so the same binary works across systems.
     let backend_preference = parse_backend_flag(&args);
     let backend = resolve_backend(backend_preference);
 
-    stream_waybar(backend, interval_ms, bands);
+    stream_waybar(backend, interval_ms, bands, &cava_source_mode);
 }
 
 fn print_help() {
@@ -69,14 +77,15 @@ fn print_help() {
     println!("  --interval-ms <n>    Update interval in milliseconds (default 100)");
     println!("  --bands <n>          Number of visualizer bands (default 16)");
     println!("  --backend <name>     auto|cava|wpctl|pactl|mock (default auto)");
+    println!("  --cava-source <src>  auto|default-monitor|<pulse-source>");
     println!("  --toggle-mute        Toggle default sink mute");
     println!("  --toggle-playback    Toggle media playback");
 }
 
-fn stream_waybar(backend: Backend, interval_ms: u64, bands: usize) {
+fn stream_waybar(backend: Backend, interval_ms: u64, bands: usize, cava_source_mode: &CavaSourceMode) {
     if let Backend::Cava = backend {
         // CAVA has its own read loop and pacing based on CAVA output.
-        stream_cava_waybar(bands);
+        stream_cava_waybar(bands, cava_source_mode);
         return;
     }
 
@@ -126,85 +135,108 @@ fn write_payload_line(line: &str) -> io::Result<()> {
     writeln!(stdout, "{}", line)
 }
 
-fn stream_cava_waybar(bands: usize) {
-    // Generate a temporary CAVA config to avoid touching user files.
-    let config_path = build_cava_config_file(bands);
-
-    let mut child = match Command::new("cava")
-        .args(["-p", &config_path.to_string_lossy()])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => {
-            // If CAVA fails to spawn, keep the module alive via control backend fallback.
-            let fallback = detect_control_backend();
-            stream_waybar(fallback, 100, bands);
-            return;
-        }
-    };
-
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => {
-            let _ = child.kill();
-            let _ = fs::remove_file(&config_path);
-            let fallback = detect_control_backend();
-            stream_waybar(fallback, 100, bands);
-            return;
-        }
-    };
-
-    let mut reader = io::BufReader::new(stdout);
-    let mut line = String::new();
+fn stream_cava_waybar(bands: usize, source_mode: &CavaSourceMode) {
+    let mut last_default_sink = get_default_sink_name();
 
     loop {
-        line.clear();
-        let bytes = match reader.read_line(&mut line) {
-            Ok(n) => n,
-            Err(_) => break,
+        let source = resolve_cava_source(source_mode, last_default_sink.as_deref());
+        // Generate a temporary CAVA config to avoid touching user files.
+        let config_path = build_cava_config_file(bands, &source);
+
+        let mut child = match Command::new("cava")
+            .args(["-p", &config_path.to_string_lossy()])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => {
+                // If CAVA fails to spawn, keep the module alive via control backend fallback.
+                let fallback = detect_control_backend();
+                stream_waybar(fallback, 100, bands, source_mode);
+                return;
+            }
         };
 
-        if bytes == 0 {
-            break;
-        }
-
-        // Convert CAVA ascii digits (0-7) into a compact text bar line.
-        let bars = render_cava_ascii_bars(&line);
-        let control = read_control_snapshot().unwrap_or(AudioSnapshot {
-            level: 0.0,
-            muted: false,
-            playing: false,
-        });
-
-        let class = if control.muted {
-            "muted"
-        } else if control.playing {
-            "playing"
-        } else {
-            "paused"
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                let _ = child.kill();
+                let _ = fs::remove_file(&config_path);
+                let fallback = detect_control_backend();
+                stream_waybar(fallback, 100, bands, source_mode);
+                return;
+            }
         };
 
-        let payload = json!({
-            "text": bars,
-            "class": class,
-            "alt": class,
-            "tooltip": format!(
-                "backend: {}\\nlevel: {}%\\nstate: {}",
-                backend_name(Backend::Cava),
-                (control.level * 100.0).round(),
-                class
-            )
-        });
+        let mut reader = io::BufReader::new(stdout);
+        let mut line = String::new();
+        let mut frame_count: u32 = 0;
 
-        if write_payload_line(&payload.to_string()).is_err() {
-            break;
+        loop {
+            line.clear();
+            let bytes = match reader.read_line(&mut line) {
+                Ok(n) => n,
+                Err(_) => break,
+            };
+
+            if bytes == 0 {
+                break;
+            }
+
+            // Convert CAVA ascii digits (0-7) into a compact text bar line.
+            let bars = render_cava_ascii_bars(&line);
+            let control = read_control_snapshot().unwrap_or(AudioSnapshot {
+                level: 0.0,
+                muted: false,
+                playing: false,
+            });
+
+            let class = if control.muted {
+                "muted"
+            } else if control.playing {
+                "playing"
+            } else {
+                "paused"
+            };
+
+            let payload = json!({
+                "text": bars,
+                "class": class,
+                "alt": class,
+                "tooltip": format!(
+                    "backend: {}\\nsource: {}\\nlevel: {}%\\nstate: {}",
+                    backend_name(Backend::Cava),
+                    source,
+                    (control.level * 100.0).round(),
+                    class
+                )
+            });
+
+            if write_payload_line(&payload.to_string()).is_err() {
+                let _ = child.kill();
+                let _ = fs::remove_file(config_path);
+                return;
+            }
+
+            frame_count = frame_count.wrapping_add(1);
+            // Re-check sink every ~30 frames to survive routing changes (EasyEffects on/off).
+            if frame_count % 30 == 0 {
+                let current_sink = get_default_sink_name();
+                if current_sink != last_default_sink {
+                    last_default_sink = current_sink;
+                    break;
+                }
+            }
         }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = fs::remove_file(config_path);
+
+        // Avoid hot-looping if CAVA exits immediately while audio stack is unstable.
+        thread::sleep(Duration::from_millis(200));
     }
-
-    let _ = child.kill();
-    let _ = fs::remove_file(config_path);
 }
 
 fn render_cava_ascii_bars(raw: &str) -> String {
@@ -226,13 +258,11 @@ fn render_cava_ascii_bars(raw: &str) -> String {
     }
 }
 
-fn build_cava_config_file(bands: usize) -> PathBuf {
+fn build_cava_config_file(bands: usize, source: &str) -> PathBuf {
     let path = env::temp_dir().join(format!(
         "waybar-audio-visualizer-cava-{}.conf",
         process::id()
     ));
-
-    let source = detect_cava_source().unwrap_or_else(|| "auto".to_string());
 
     // Keep config minimal: pulse input + raw ascii output to stdout.
     let content = format!(
@@ -245,15 +275,29 @@ fn build_cava_config_file(bands: usize) -> PathBuf {
     path
 }
 
-fn detect_cava_source() -> Option<String> {
-    // Prefer default sink monitor so CAVA captures playback output instead of mic input.
+fn resolve_cava_source(mode: &CavaSourceMode, sink_name: Option<&str>) -> String {
+    match mode {
+        CavaSourceMode::Auto => "auto".to_string(),
+        CavaSourceMode::DefaultMonitor => {
+            if let Some(sink) = sink_name {
+                if !sink.is_empty() {
+                    return format!("{}.monitor", sink);
+                }
+            }
+            "auto".to_string()
+        }
+        CavaSourceMode::Explicit(value) => value.clone(),
+    }
+}
+
+fn get_default_sink_name() -> Option<String> {
     let default_sink = run_capture("pactl", &["get-default-sink"])?;
     let sink = default_sink.trim();
     if sink.is_empty() {
-        return Some("auto".to_string());
+        None
+    } else {
+        Some(sink.to_string())
     }
-
-    Some(format!("{}.monitor", sink))
 }
 
 fn render_bars(level: f32, bands: usize, tick: u64) -> String {
@@ -459,6 +503,20 @@ fn parse_backend_flag(args: &[String]) -> BackendPreference {
         "pactl" => BackendPreference::Pactl,
         "mock" => BackendPreference::Mock,
         _ => BackendPreference::Auto,
+    }
+}
+
+fn parse_cava_source_flag(args: &[String]) -> CavaSourceMode {
+    let value = args
+        .windows(2)
+        .find(|w| w[0] == "--cava-source")
+        .map(|w| w[1].as_str())
+        .unwrap_or("auto");
+
+    match value {
+        "auto" => CavaSourceMode::Auto,
+        "default-monitor" => CavaSourceMode::DefaultMonitor,
+        other => CavaSourceMode::Explicit(other.to_string()),
     }
 }
 

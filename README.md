@@ -7,6 +7,7 @@ Audio-reactive text visualizer for Waybar, focused on Omarchy/Arch Linux workflo
 - Streams JSON output continuously for Waybar custom modules
 - Real spectrum-like bars via `cava` when available
 - Works with PipeWire via `wpctl`, with fallback to PulseAudio via `pactl`
+- Handles sink routing changes (e.g. EasyEffects on/off) by restarting CAVA automatically
 - Click actions:
   - Left click: toggle mute
   - Right click: play/pause via `playerctl`
@@ -68,12 +69,13 @@ omarchy-restart-waybar
 ## Runtime flags
 
 ```bash
-waybar-audio-visualizer --interval-ms 90 --bands 18 --backend auto
+waybar-audio-visualizer --interval-ms 90 --bands 18 --backend auto --cava-source auto
 ```
 
 - `--interval-ms`: refresh interval in ms (default: 100)
 - `--bands`: number of text bands (default: 16)
 - `--backend`: `auto|cava|wpctl|pactl|mock` (default: `auto`)
+- `--cava-source`: `auto|default-monitor|<pulse-source>` (default: `auto`)
 - `--toggle-mute`: toggles default sink mute
 - `--toggle-playback`: toggles player playback state
 
