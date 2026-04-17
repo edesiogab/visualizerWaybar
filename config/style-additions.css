@@ -1,0 +1,18 @@
+#custom-audio_visualizer {
+  min-width: 160px;
+  padding: 0 10px;
+  font-family: "JetBrainsMono Nerd Font", monospace;
+  letter-spacing: 1px;
+}
+
+#custom-audio_visualizer.playing {
+  color: @color13;
+}
+
+#custom-audio_visualizer.paused {
+  color: @color8;
+}
+
+#custom-audio_visualizer.muted {
+  color: @color1;
+}

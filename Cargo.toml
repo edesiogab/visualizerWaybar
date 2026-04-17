@@ -1,0 +1,15 @@
+[package]
+name = "waybar-audio-visualizer"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Audio-reactive text visualizer for Waybar"
+repository = "https://github.com/your-user/waybar-audio-visualizer"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[dependencies]
+serde_json = "1"

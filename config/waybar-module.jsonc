@@ -1,0 +1,8 @@
+"custom/audio_visualizer": {
+  "exec": "~/.local/bin/waybar-audio-visualizer --interval-ms 90 --bands 18",
+  "return-type": "json",
+  "format": "{text}",
+  "on-click": "~/.local/bin/waybar-audio-visualizer --toggle-mute",
+  "on-click-right": "~/.local/bin/waybar-audio-visualizer --toggle-playback",
+  "tooltip": true
+}
