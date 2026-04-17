@@ -209,7 +209,8 @@ fn stream_cava_waybar(bands: usize) {
 
 fn render_cava_ascii_bars(raw: &str) -> String {
     let mut out = String::new();
-    let charset: [char; 8] = [' ', '.', ':', '-', '=', '+', '*', '#'];
+    // Block glyphs look like real bars in Waybar and are easier to read than punctuation.
+    let charset: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
     for ch in raw.trim().chars() {
         if let Some(digit) = ch.to_digit(10) {
@@ -219,7 +220,7 @@ fn render_cava_ascii_bars(raw: &str) -> String {
     }
 
     if out.is_empty() {
-        " ".to_string()
+        "▁".to_string()
     } else {
         out
     }
@@ -231,18 +232,32 @@ fn build_cava_config_file(bands: usize) -> PathBuf {
         process::id()
     ));
 
+    let source = detect_cava_source().unwrap_or_else(|| "auto".to_string());
+
     // Keep config minimal: pulse input + raw ascii output to stdout.
     let content = format!(
-        "[general]\nframerate = 30\nbars = {}\n\n[input]\nmethod = pulse\n\n[output]\nmethod = raw\nraw_target = /dev/stdout\ndata_format = ascii\nascii_max_range = 7\nbar_delimiter = 0\nchannels = mono\n",
-        bands.max(2)
+        "[general]\nframerate = 30\nbars = {}\n\n[input]\nmethod = pulse\nsource = {}\n\n[output]\nmethod = raw\nraw_target = /dev/stdout\ndata_format = ascii\nascii_max_range = 7\nbar_delimiter = 0\nchannels = mono\n",
+        bands.max(2),
+        source
     );
 
     let _ = fs::write(&path, content);
     path
 }
 
+fn detect_cava_source() -> Option<String> {
+    // Prefer default sink monitor so CAVA captures playback output instead of mic input.
+    let default_sink = run_capture("pactl", &["get-default-sink"])?;
+    let sink = default_sink.trim();
+    if sink.is_empty() {
+        return Some("auto".to_string());
+    }
+
+    Some(format!("{}.monitor", sink))
+}
+
 fn render_bars(level: f32, bands: usize, tick: u64) -> String {
-    let charset: Vec<char> = " .:-=+*#%@".chars().collect();
+    let charset: Vec<char> = "▁▂▃▄▅▆▇█".chars().collect();
     let mut out = String::with_capacity(bands);
     let capped = level.clamp(0.0, 1.0);
 

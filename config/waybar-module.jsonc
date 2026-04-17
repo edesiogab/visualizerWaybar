@@ -2,7 +2,7 @@
   "exec": "~/.local/bin/waybar-audio-visualizer --interval-ms 90 --bands 18 --backend auto",
   "return-type": "json",
   "format": "{text}",
-  "on-click": "~/.local/bin/waybar-audio-visualizer --toggle-mute",
-  "on-click-right": "~/.local/bin/waybar-audio-visualizer --toggle-playback",
+  "on-click": "~/.local/bin/waybar-audio-visualizer --toggle-playback",
+  "on-click-right": "~/.local/bin/waybar-audio-visualizer --toggle-mute",
   "tooltip": true
 }
